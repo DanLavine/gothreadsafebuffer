@@ -15,6 +15,6 @@ type Config struct {
 	// set this to 0
 	ReadTimeout time.Duration
 
-	// how long Close() Read operations will last untill they just start reporting errors
-	// CloseTimeout time.Duration
+	// how long to wait for Read() operations to drain before just reporting errors
+	DrainTime time.Duration
 }

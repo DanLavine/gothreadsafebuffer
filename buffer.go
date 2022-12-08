@@ -26,6 +26,8 @@ type ThreadSafeBuffer struct {
 	buffer        *bytes.Buffer
 	bufferSize    uint64
 	maxBufferSize uint64
+
+	drainTime time.Time
 }
 
 // Create a new thread safe buffer
@@ -86,7 +88,7 @@ func (tsb *ThreadSafeBuffer) Read(b []byte) (int, error) {
 			case <-ticker.C:
 				return 0, &BuffErr{Op: "read", Err: fmt.Errorf("Failed to read in time")}
 			case _, ok := <-tsb.notify.Ready():
-				n, err := tsb.readLoop(b, ok)
+				n, err := tsb.readLoop(b, !ok)
 				if err != nil {
 					return n, err
 				}
@@ -100,7 +102,7 @@ func (tsb *ThreadSafeBuffer) Read(b []byte) (int, error) {
 		for {
 			select {
 			case _, ok := <-tsb.notify.Ready():
-				n, err := tsb.readLoop(b, ok)
+				n, err := tsb.readLoop(b, !ok)
 				if err != nil {
 					return n, err
 				}
@@ -113,12 +115,13 @@ func (tsb *ThreadSafeBuffer) Read(b []byte) (int, error) {
 	}
 }
 
+// function to loop over waiting for the data in the buffer, or an error
 func (tsb *ThreadSafeBuffer) readLoop(b []byte, draining bool) (int, error) {
 	tsb.bufferLock.Lock()
 	defer tsb.bufferLock.Unlock()
 
 	// we are closing the buffer
-	if !draining {
+	if draining {
 		// check to see if we should drain
 		if tsb.shouldDrain() {
 			// ensure we can read everything since no more writes will come through on a closed buffer
@@ -136,7 +139,7 @@ func (tsb *ThreadSafeBuffer) readLoop(b []byte, draining bool) (int, error) {
 			}
 		}
 
-		return 0, &BuffErr{Op: "read", Err: fmt.Errorf("thread safe buffer is closed")}
+		return 0, &BuffErr{Op: "read", Err: fmt.Errorf("Thread safe buffer is closed")}
 	}
 
 	// wait untill the buffer is full so we can read from it
@@ -159,6 +162,10 @@ func (tsb *ThreadSafeBuffer) shouldDrain() bool {
 		tsb.bufferLock.Lock()
 		defer tsb.bufferLock.Unlock()
 
+		if time.Since(tsb.drainTime) > tsb.config.DrainTime {
+			return false
+		}
+
 		if tsb.buffer.Len() != 0 {
 			return true
 		}
@@ -176,5 +183,6 @@ func (tsb *ThreadSafeBuffer) Close() {
 	tsb.once.Do(func() {
 		close(tsb.done)
 		tsb.notify.Stop()
+		tsb.drainTime = time.Now()
 	})
 }

@@ -8,5 +8,5 @@ type BuffErr struct {
 }
 
 func (be *BuffErr) Error() string {
-	return fmt.Sprintf("Failed %s to pipe. %s", be.Op, be.Err.Error())
+	return fmt.Sprintf("Failed buffer %s: %s", be.Op, be.Err.Error())
 }
