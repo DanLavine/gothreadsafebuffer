@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 type Config struct {
 	// When set to true, will use the MaxBufferSize. Otherwise it will be ignored
 	MaxBuffer bool
@@ -11,7 +13,7 @@ type Config struct {
 
 	// How long it should take for a read operation before reporting an error. To have this be infinite
 	// set this to 0
-	// ReadTimeout time.Duration
+	ReadTimeout time.Duration
 
 	// how long Close() Read operations will last untill they just start reporting errors
 	// CloseTimeout time.Duration

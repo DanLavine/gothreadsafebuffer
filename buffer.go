@@ -4,14 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/DanLavine/gonotify"
 )
-
-type message struct {
-	bytes int
-	err   error
-}
 
 // ThreadSafeBuffer can be used by any number of goroutines to safely call
 // any of the provided functions.
@@ -81,37 +77,51 @@ func (tsb *ThreadSafeBuffer) Read(b []byte) (int, error) {
 	tsb.readLock.Lock()
 	defer tsb.readLock.Unlock()
 
-	for {
-		select {
-		case _, ok := <-tsb.notify.Ready():
-			tsb.bufferLock.Lock()
+	if tsb.config.ReadTimeout != 0 {
+		ticker := time.NewTicker(tsb.config.ReadTimeout)
+		defer ticker.Stop()
 
-			// we are closing the buffer
-			if !ok {
-				// check to see if we should drain
-				if tsb.shouldDrain() {
-					// ensure we can read everything since no more writes will come through on a closed buffer
-					if tsb.buffer.Len() >= len(b) {
-						n, err := tsb.buffer.Read(b)
-
-						// there is still more data to be read so notify again
-						if tsb.buffer.Len() != 0 {
-							tsb.notify.Add()
-						}
-
-						tsb.bufferLock.Unlock()
-						return n, err
-					} else {
-						tsb.bufferLock.Unlock()
-						return 0, &BuffErr{Op: "read", Err: fmt.Errorf("Thread safe buffer is closed. Attempting to read more data than is in the buffer")}
-					}
+		for {
+			select {
+			case <-ticker.C:
+				return 0, &BuffErr{Op: "read", Err: fmt.Errorf("Failed to read in time")}
+			case _, ok := <-tsb.notify.Ready():
+				n, err := tsb.readLoop(b, ok)
+				if err != nil {
+					return n, err
 				}
 
-				tsb.bufferLock.Unlock()
-				return 0, &BuffErr{Op: "read", Err: fmt.Errorf("thread safe buffer is closed")}
+				if n != 0 {
+					return n, err
+				}
 			}
+		}
+	} else {
+		for {
+			select {
+			case _, ok := <-tsb.notify.Ready():
+				n, err := tsb.readLoop(b, ok)
+				if err != nil {
+					return n, err
+				}
 
-			// wait untill the buffer is full so we can read from it
+				if n != 0 {
+					return n, err
+				}
+			}
+		}
+	}
+}
+
+func (tsb *ThreadSafeBuffer) readLoop(b []byte, draining bool) (int, error) {
+	tsb.bufferLock.Lock()
+	defer tsb.bufferLock.Unlock()
+
+	// we are closing the buffer
+	if !draining {
+		// check to see if we should drain
+		if tsb.shouldDrain() {
+			// ensure we can read everything since no more writes will come through on a closed buffer
 			if tsb.buffer.Len() >= len(b) {
 				n, err := tsb.buffer.Read(b)
 
@@ -120,14 +130,28 @@ func (tsb *ThreadSafeBuffer) Read(b []byte) (int, error) {
 					tsb.notify.Add()
 				}
 
-				tsb.bufferLock.Unlock()
 				return n, err
 			} else {
-				// not reading yet so unlock to allow more writes
-				tsb.bufferLock.Unlock()
+				return 0, &BuffErr{Op: "read", Err: fmt.Errorf("Thread safe buffer is closed. Attempting to read more data than is in the buffer")}
 			}
 		}
+
+		return 0, &BuffErr{Op: "read", Err: fmt.Errorf("thread safe buffer is closed")}
 	}
+
+	// wait untill the buffer is full so we can read from it
+	if tsb.buffer.Len() >= len(b) {
+		n, err := tsb.buffer.Read(b)
+
+		// there is still more data to be read so notify again
+		if tsb.buffer.Len() != 0 {
+			tsb.notify.Add()
+		}
+
+		return n, err
+	}
+
+	return 0, nil
 }
 
 func (tsb *ThreadSafeBuffer) shouldDrain() bool {
