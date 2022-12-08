@@ -1,4 +1,4 @@
-package main
+package gothreadsafebuffer
 
 import (
 	"bytes"
@@ -57,7 +57,7 @@ func NewThreadSafeBuffer(config Config) *ThreadSafeBuffer {
 func (tsb *ThreadSafeBuffer) Write(b []byte) (int, error) {
 	select {
 	case <-tsb.done:
-		return 0, &BuffErr{Op: "write", Err: fmt.Errorf("thread safe buffer is closed")}
+		return 0, &BuffErr{Op: "write", Err: fmt.Errorf("Thread safe buffer is closed")}
 	default:
 		tsb.bufferLock.Lock()
 		defer tsb.bufferLock.Unlock()
@@ -121,7 +121,8 @@ func (tsb *ThreadSafeBuffer) readLoop(b []byte, draining bool) (int, error) {
 	defer tsb.bufferLock.Unlock()
 
 	// we are closing the buffer
-	if draining {
+	select {
+	case <-tsb.done:
 		// check to see if we should drain
 		if tsb.shouldDrain() {
 			// ensure we can read everything since no more writes will come through on a closed buffer
@@ -140,49 +141,50 @@ func (tsb *ThreadSafeBuffer) readLoop(b []byte, draining bool) (int, error) {
 		}
 
 		return 0, &BuffErr{Op: "read", Err: fmt.Errorf("Thread safe buffer is closed")}
-	}
+	default:
+		// wait untill the buffer is full so we can read from it
+		if tsb.buffer.Len() >= len(b) {
+			n, err := tsb.buffer.Read(b)
 
-	// wait untill the buffer is full so we can read from it
-	if tsb.buffer.Len() >= len(b) {
-		n, err := tsb.buffer.Read(b)
+			// there is still more data to be read so notify again
+			if tsb.buffer.Len() != 0 {
+				tsb.notify.Add()
+			}
 
-		// there is still more data to be read so notify again
-		if tsb.buffer.Len() != 0 {
-			tsb.notify.Add()
+			return n, err
 		}
 
-		return n, err
+		return 0, nil
 	}
-
-	return 0, nil
 }
 
 func (tsb *ThreadSafeBuffer) shouldDrain() bool {
 	if tsb.config.DrainRead {
-		tsb.bufferLock.Lock()
-		defer tsb.bufferLock.Unlock()
-
-		if time.Since(tsb.drainTime) > tsb.config.DrainTime {
+		if tsb.config.DrainTime != 0 && time.Since(tsb.drainTime) > tsb.config.DrainTime {
+			// we took to long to drain, so return false
 			return false
 		}
 
 		if tsb.buffer.Len() != 0 {
+			// buffer still has data, should drain
 			return true
 		}
-
-		return false
 	}
 
-	// not draining
+	// should not drain
 	return false
 }
 
 // Close can be used to block any further read and write to this buffer. Will
-// also clean up any Read functions currently waiting
+// also clean up any Read functions currently waiting and cleanup goroutines manged
+// by the thread safe buffer
 func (tsb *ThreadSafeBuffer) Close() {
 	tsb.once.Do(func() {
-		close(tsb.done)
 		tsb.notify.Stop()
-		tsb.drainTime = time.Now()
+		close(tsb.done)
+
+		if tsb.config.DrainTime != 0 {
+			tsb.drainTime = time.Now()
+		}
 	})
 }
