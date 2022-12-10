@@ -55,13 +55,13 @@ func NewThreadSafeBuffer(config Config) *ThreadSafeBuffer {
 
 // Write is used to add data into the buffer and record the size of the buffer.
 func (tsb *ThreadSafeBuffer) Write(b []byte) (int, error) {
+	tsb.bufferLock.Lock()
+	defer tsb.bufferLock.Unlock()
+
 	select {
 	case <-tsb.done:
 		return 0, &BuffErr{Op: "write", Err: fmt.Errorf("Thread safe buffer is closed")}
 	default:
-		tsb.bufferLock.Lock()
-		defer tsb.bufferLock.Unlock()
-
 		if tsb.config.MaxBuffer && tsb.buffer.Len()+len(b) > tsb.config.MaxBufferSize {
 			return 0, &BuffErr{Op: "write", Err: fmt.Errorf("write exceeds max buffer size")}
 		}
@@ -180,6 +180,10 @@ func (tsb *ThreadSafeBuffer) shouldDrain() bool {
 // by the thread safe buffer
 func (tsb *ThreadSafeBuffer) Close() {
 	tsb.once.Do(func() {
+		// don't want to close the buffer in the middle of a write operation
+		tsb.bufferLock.Lock()
+		defer tsb.bufferLock.Unlock()
+
 		tsb.notify.Stop()
 		close(tsb.done)
 
