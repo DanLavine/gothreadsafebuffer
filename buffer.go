@@ -87,36 +87,40 @@ func (tsb *ThreadSafeBuffer) Read(b []byte) (int, error) {
 			select {
 			case <-ticker.C:
 				return 0, &BuffErr{Op: "read", Err: fmt.Errorf("Failed to read in time")}
-			case _, ok := <-tsb.notify.Ready():
-				n, err := tsb.readLoop(b, !ok)
+			case <-tsb.notify.Ready():
+				n, err := tsb.readLoop(b)
 				if err != nil {
 					return n, err
 				}
 
 				if n != 0 {
-					return n, err
+					return n, nil
 				}
+
+				// if n == 0, we want to loop again since we didn't read anything
 			}
 		}
 	} else {
 		for {
 			select {
-			case _, ok := <-tsb.notify.Ready():
-				n, err := tsb.readLoop(b, !ok)
+			case <-tsb.notify.Ready():
+				n, err := tsb.readLoop(b)
 				if err != nil {
 					return n, err
 				}
 
 				if n != 0 {
-					return n, err
+					return n, nil
 				}
+
+				// if n == 0, we want to loop again since we didn't read anything
 			}
 		}
 	}
 }
 
 // function to loop over waiting for the data in the buffer, or an error
-func (tsb *ThreadSafeBuffer) readLoop(b []byte, draining bool) (int, error) {
+func (tsb *ThreadSafeBuffer) readLoop(b []byte) (int, error) {
 	tsb.bufferLock.Lock()
 	defer tsb.bufferLock.Unlock()
 
